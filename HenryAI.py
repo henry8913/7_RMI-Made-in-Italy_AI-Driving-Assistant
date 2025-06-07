@@ -1,5 +1,6 @@
 import os
 import requests
+import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -11,7 +12,8 @@ BACKEND_URL = os.getenv("BACKEND_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": FRONTEND_URL}})
+# Modifica della configurazione CORS per consentire richieste da qualsiasi origine durante lo sviluppo
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 conversation_history = {}
 MAX_HISTORY_LENGTH = 15
@@ -67,10 +69,12 @@ Rispondi sempre in modo preciso, professionale e immediato. Utilizza un tono ele
 
 def update_conversation_history(session_id, role, content):
     if session_id not in conversation_history:
-        conversation_history[session_id] = []
+        conversation_history[session_id] = []    
     conversation_history[session_id].append({"role": role, "content": content})
-    if len(conversation_history[session_id]) > MAX_HISTORY_LENGTH:
-        conversation_history[session_id] = conversation_history[session_id][-MAX_HISTORY_LENGTH:]
+    
+    # Mantieni solo gli ultimi MAX_HISTORY_LENGTH messaggi
+    if len(conversation_history[session_id]) > MAX_HISTORY_LENGTH * 2:  # *2 perché ogni scambio ha 2 messaggi
+        conversation_history[session_id] = conversation_history[session_id][-MAX_HISTORY_LENGTH * 2:]
 
 from pymongo import MongoClient
 
@@ -88,7 +92,7 @@ except Exception as e:
     print(f"❌ Errore connessione MongoDB: {e}")
     exit(1)
 
-async def get_enriched_context():
+def get_enriched_context():
     try:
         context = "\nDati aggiornati dal database:\n"
 
@@ -141,8 +145,8 @@ async def get_enriched_context():
         print(f"Errore recupero dati: {e}")
         return ""
 
-async def ask_openrouter(prompt, session_id):
-    context = await get_enriched_context()
+def ask_openrouter(prompt, session_id):
+    context = get_enriched_context()
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -177,7 +181,7 @@ async def ask_openrouter(prompt, session_id):
         return "Mi dispiace, c'è stato un problema nella comunicazione. Riprova tra poco."
 
 @app.route('/api/chat', methods=['POST'])
-async def chat():
+def chat():
     data = request.json
     prompt = data.get('message', '')
     session_id = data.get('session_id', 'default')
@@ -185,7 +189,7 @@ async def chat():
     if not prompt:
         return jsonify({"status": "error", "message": "Messaggio vuoto"}), 400
 
-    response = await ask_openrouter(prompt, session_id)
+    response = ask_openrouter(prompt, session_id)
 
     update_conversation_history(session_id, "user", prompt)
     update_conversation_history(session_id, "assistant", response)
@@ -201,7 +205,7 @@ def status():
     })
 
 @app.route('/api/test', methods=['POST'])
-async def test_chat():
+def test_chat():
     data = request.json
     if not data or 'message' not in data:
         return jsonify({"error": "Missing message"}), 400
@@ -209,7 +213,7 @@ async def test_chat():
     message = data['message']
     session_id = data.get('session_id', 'test_session')
 
-    response = await ask_openrouter(message, session_id)
+    response = ask_openrouter(message, session_id)
 
     update_conversation_history(session_id, "user", message)
     update_conversation_history(session_id, "assistant", response)
@@ -220,7 +224,7 @@ async def test_chat():
         "session_id": session_id
     })
 
-async def run_test_mode():
+def run_test_mode():
     print("\n🤖 RMI AI Assistant Test Mode")
     print("🔌 Connessione al backend:", os.getenv("BACKEND_URL", "http://0.0.0.0:2025"))
     print("Scrivi 'exit' per uscire\n")
@@ -229,7 +233,7 @@ async def run_test_mode():
 
     # Test connessione backend
     try:
-        context = await get_enriched_context()
+        context = get_enriched_context()
         if context:
             print("✅ Backend connesso e dati recuperati")
         else:
@@ -242,7 +246,7 @@ async def run_test_mode():
         if user_input.lower() == 'exit':
             break
 
-        response = await ask_openrouter(user_input, session_id)
+        response = ask_openrouter(user_input, session_id)
         print("\nAssistant:", response)
 
         update_conversation_history(session_id, "user", user_input)
@@ -250,10 +254,9 @@ async def run_test_mode():
 
 if __name__ == '__main__':
     import sys
-    import asyncio
 
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
-        asyncio.run(run_test_mode())
+        run_test_mode()
     else:
         port = int(os.environ.get("PORT", 5001))
         print(f"\n🤖 RMI AI Assistant è online sulla porta {port}!")
